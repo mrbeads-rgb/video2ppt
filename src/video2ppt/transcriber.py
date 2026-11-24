@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import subprocess
+import wave
 from pathlib import Path
+
+import numpy as np
 
 from video2ppt.models import SlideSegment
 
@@ -32,6 +35,14 @@ def extract_audio_wav(video_path: str | Path, out_wav: Path) -> Path:
     return out_wav
 
 
+def _load_wav_float32(wav_path: Path) -> np.ndarray:
+    """Load mono 16-bit PCM WAV directly as float32 [-1, 1] (avoids PyAV>=19 metadata_errors bug)."""
+    with wave.open(str(wav_path), "rb") as wf:
+        raw = wf.readframes(wf.getnframes())
+    samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    return samples
+
+
 def transcribe_speaker_notes(
     video_path: str | Path,
     segments: list[SlideSegment],
@@ -47,8 +58,9 @@ def transcribe_speaker_notes(
         ) from exc
 
     wav_path = extract_audio_wav(video_path, work_dir / "audio_16k.wav")
+    audio_f32 = _load_wav_float32(wav_path)
     model = WhisperModel(model_size, device="cpu", compute_type="int8")
-    whisper_segs, _ = model.transcribe(str(wav_path), vad_filter=True, beam_size=3)
+    whisper_segs, _ = model.transcribe(audio_f32, vad_filter=True, beam_size=3)
 
     notes_by_slide: dict[int, list[str]] = {seg.slide_index: [] for seg in segments}
     for w_seg in whisper_segs:

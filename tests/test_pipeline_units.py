@@ -284,3 +284,24 @@ def test_analyzer_factory_fallback_and_vlm_fusion(tmp_path: Path, monkeypatch: p
     assert len(layout.text_blocks) == 1
     assert layout.text_blocks[0].text == "Card Title"
     assert Path(layout.clean_bg_path).exists()
+
+
+def test_load_wav_float32(tmp_path: Path) -> None:
+    import wave
+
+    from video2ppt.transcriber import _load_wav_float32
+
+    wav_path = tmp_path / "tone.wav"
+    pcm = np.array([0, 16384, -16384, 32767], dtype=np.int16)
+    with wave.open(str(wav_path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(pcm.tobytes())
+
+    arr = _load_wav_float32(wav_path)
+    assert arr.dtype == np.float32
+    assert arr.shape == (4,)
+    assert arr[1] == pytest.approx(0.5, abs=1e-4)
+    assert arr[2] == pytest.approx(-0.5, abs=1e-4)
+
