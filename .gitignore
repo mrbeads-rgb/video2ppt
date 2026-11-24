@@ -1,0 +1,26 @@
+# Virtual environments & Python caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+dist/
+build/
+
+# Local media inputs, generated decks, and intermediate work artifacts
+input/
+output/
+probe_frames/
+probe_slides/
+*.mp4
+*.mov
+*.mkv
+*.pptx
+*.wav
+*.pdf
+
+# OS / editor noise
+.DS_Store
+.vscode/
+.idea/
