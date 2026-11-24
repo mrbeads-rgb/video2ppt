@@ -50,9 +50,14 @@ def _slide_dimensions_inches(width_px: int, height_px: int) -> tuple[float, floa
 
 
 def _set_cell_no_fill_and_subtle_border(cell, border_hex: str | None = None) -> None:
-    """Keep table cells transparent with clean light borders (or no borders on hybrid canvas)."""
-    cell.fill.background()
+    """Keep table cells genuinely transparent in both PowerPoint and Google Slides."""
     tcPr = cell._tc.get_or_add_tcPr()
+    for fill_tag in ("a:noFill", "a:solidFill", "a:gradFill", "a:blipFill", "a:pattFill"):
+        existing_fill = tcPr.find(qn(fill_tag))
+        if existing_fill is not None:
+            tcPr.remove(existing_fill)
+    etree.SubElement(tcPr, qn("a:noFill"))
+
     for tag in ("a:lnL", "a:lnR", "a:lnT", "a:lnB"):
         existing = tcPr.find(qn(tag))
         if existing is not None:
@@ -120,11 +125,14 @@ def _add_native_table(
     )
     table = shape.table
 
-    # Disable banded row / default blue PowerPoint table styling
+    # Remove default banded PowerPoint tableStyleId so Google Slides & PowerPoint keep cells transparent
     tblPr = table._tbl.tblPr
     if tblPr is not None:
         for attr in ("bandRow", "firstRow", "bandCol", "lastRow", "firstCol", "lastCol"):
             tblPr.set(attr, "0")
+        style_id = tblPr.find(qn("a:tableStyleId"))
+        if style_id is not None:
+            tblPr.remove(style_id)
 
     # Apply exact column widths & row heights
     if len(tbl_spec.col_widths_px) == tbl_spec.cols:

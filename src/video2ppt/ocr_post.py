@@ -113,7 +113,7 @@ def merge_same_line_fragments(
                 cand_box = items[j][0]
                 v_ov = g_box.vertical_overlap_ratio(cand_box)
                 h_ratio = min(g_box.h, cand_box.h) / max(1.0, max(g_box.h, cand_box.h))
-                if v_ov < 0.62 or h_ratio < 0.68:
+                if v_ov < 0.58 or h_ratio < 0.56:
                     continue
 
                 # Horizontal gap (negative means overlap!)

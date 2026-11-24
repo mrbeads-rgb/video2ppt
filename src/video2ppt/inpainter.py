@@ -61,12 +61,13 @@ def _build_text_inpaint_mask(
 
     if remove_watermark and watermark_bboxes:
         for wb in watermark_bboxes:
-            # Expand slightly left to also cover tiny logo icon next to watermark text
+            # Expand slightly left to also cover tiny logo icon next to watermark text,
+            # while staying inside outer 4px video frame border to avoid bleeding dark edges
             pad_left = max(24.0, wb.h * 1.6)
             x0 = max(0, int(np.floor(wb.x - pad_left)))
             y0 = max(0, int(np.floor(wb.y - 4)))
-            x1 = min(w, int(np.ceil(wb.x2 + 6)))
-            y1 = min(h, int(np.ceil(wb.y2 + 6)))
+            x1 = min(max(x0 + 1, w - 4), int(np.ceil(wb.x2 + 6)))
+            y1 = min(max(y0 + 1, h - 4), int(np.ceil(wb.y2 + 4)))
             mask[y0:y1, x0:x1] = 255
 
     return mask
