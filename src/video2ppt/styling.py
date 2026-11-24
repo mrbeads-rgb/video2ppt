@@ -66,15 +66,18 @@ def measure_rendered_text_width_px(
 
 
 def estimate_slide_background_color(img_bgr: np.ndarray) -> RGBColor:
-    """Estimate dominant canvas background color from image borders and low-gradient regions."""
+    """Estimate dominant canvas background color from inner margin bands (ignoring outer video bars)."""
     h, w = img_bgr.shape[:2]
-    # Sample border strips + uniform interior grid
+    m_y = min(10, h // 40)
+    m_x = min(10, w // 40)
+    band_y = max(4, h // 32)
+    band_x = max(4, w // 32)
     samples = np.concatenate(
         [
-            img_bgr[0 : max(2, h // 40), :].reshape(-1, 3),
-            img_bgr[h - max(2, h // 40) : h, :].reshape(-1, 3),
-            img_bgr[:, 0 : max(2, w // 40)].reshape(-1, 3),
-            img_bgr[:, w - max(2, w // 40) : w].reshape(-1, 3),
+            img_bgr[m_y : m_y + band_y, m_x : w - m_x].reshape(-1, 3),
+            img_bgr[h - m_y - band_y : h - m_y, m_x : w - m_x].reshape(-1, 3),
+            img_bgr[m_y : h - m_y, m_x : m_x + band_x].reshape(-1, 3),
+            img_bgr[m_y : h - m_y, w - m_x - band_x : w - m_x].reshape(-1, 3),
         ],
         axis=0,
     )
@@ -82,7 +85,7 @@ def estimate_slide_background_color(img_bgr: np.ndarray) -> RGBColor:
     q = (samples // 8) * 8
     vals, counts = np.unique(q, axis=0, return_counts=True)
     mode_q = vals[int(np.argmax(counts))]
-    inliers = samples[np.all(np.abs(samples.astype(np.int16) - mode_q.astype(np.int16)) <= 12, axis=1)]
+    inliers = samples[np.all(np.abs(samples.astype(np.int16) - mode_q.astype(np.int16)) <= 14, axis=1)]
     med = np.median(inliers, axis=0) if len(inliers) > 0 else np.median(samples, axis=0)
     return RGBColor(r=int(round(med[2])), g=int(round(med[1])), b=int(round(med[0])))
 

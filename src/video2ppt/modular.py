@@ -165,13 +165,18 @@ def extract_modular_elements(
     h, w = clean_bg_bgr.shape[:2]
     assets_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Detect native card / panel shapes
-    cards = detect_card_shapes(clean_bg_bgr, canvas_bg, text_blocks)
-
-    # 2. Collect native highlight pills from text blocks (for z-order just behind text!)
+    # 1. Collect native highlight pills from text blocks (for z-order just behind text!)
     highlights: list[HighlightSpan] = []
     for tb in text_blocks:
         highlights.extend(tb.highlights)
+
+    # 2. Detect native card / panel shapes, skipping any duplicate box matching a highlight pill
+    raw_cards = detect_card_shapes(clean_bg_bgr, canvas_bg, text_blocks)
+    cards = [
+        c
+        for c in raw_cards
+        if not any(c.bbox.iou(hl.bbox) > 0.45 for hl in highlights)
+    ]
 
     shapes: list[DetectedShape] = list(cards)
     for hl in highlights:
@@ -194,20 +199,19 @@ def extract_modular_elements(
         cv2.cvtColor(canvas_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2LAB).reshape(3).astype(np.float32)
     )
 
-    # Start with pixel distance from global canvas background (threshold 20 ignores subtle graph-paper grid!)
     bg_lab_map = np.broadcast_to(canvas_lab[None, None, :], (h, w, 3)).copy()
     card_border_mask = np.zeros((h, w), dtype=np.uint8)
 
     # Inside detected cards, replace local expected background with the card's fill color so we still
-    # extract doodle icons that sit INSIDE cards (like Slide 9 or Slide 14 or Slide 16)!
+    # extract doodle icons that sit INSIDE cards (like Slide 9, Slide 14, Slide 16)!
     for card in cards:
         x0, y0 = max(0, int(card.bbox.x)), max(0, int(card.bbox.y))
         x1, y1 = min(w, int(card.bbox.x2)), min(h, int(card.bbox.y2))
         c_bgr = np.array(card.fill_color.to_bgr(), dtype=np.uint8)
         c_lab = cv2.cvtColor(c_bgr.reshape(1, 1, 3), cv2.COLOR_BGR2LAB).reshape(3).astype(np.float32)
         bg_lab_map[y0:y1, x0:x1] = c_lab
-        # Mask out the card's own outline ring so we don't re-extract the border as a bitmap graphic
-        cv2.rectangle(card_border_mask, (x0, y0), (x1 - 1, y1 - 1), 255, thickness=12)
+        # Mask out only the card's own outline ring so we don't re-extract the border as a bitmap graphic
+        cv2.rectangle(card_border_mask, (x0, y0), (x1 - 1, y1 - 1), 255, thickness=10)
 
     # Mask out highlight pills (they are already native shapes)
     hl_mask = np.zeros((h, w), dtype=np.uint8)
@@ -226,15 +230,22 @@ def extract_modular_elements(
         wm_mask[wy0:wy1, wx0:wx1] = 255
 
     dist = np.linalg.norm(lab - bg_lab_map, axis=2)
-    fg = (dist > 22.0).astype(np.uint8) * 255
+    # Slightly higher threshold (26) cleanly ignores subtle pink/purple sketch watermarks & graph-paper grids
+    fg = (dist > 26.0).astype(np.uint8) * 255
     fg[card_border_mask > 0] = 0
     fg[hl_mask > 0] = 0
     fg[wm_mask > 0] = 0
+    # Ignore outermost 6px video framing border bars so they never fuse disparate graphics across the slide
+    fg[:6, :] = 0
+    fg[h - 6 :, :] = 0
+    fg[:, :6] = 0
+    fg[:, w - 6 :] = 0
 
-    # Clean tiny dust specs, then cluster nearby doodle strokes into coherent graphic regions
+    # Clean tiny dust specs, then cluster only tightly-proximate icon strokes (9x9) so nearby icons
+    # (e.g. 3 traffic lights on Slide 6 or top row doodles on Slide 2) stay independently movable/animatable!
     fg_clean = cv2.morphologyEx(fg, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     clustered = cv2.dilate(
-        fg_clean, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21)), iterations=1
+        fg_clean, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)), iterations=1
     )
 
     num_labels, _, stats, _ = cv2.connectedComponentsWithStats(clustered, connectivity=8)
@@ -247,14 +258,14 @@ def extract_modular_elements(
         gw = int(stats[lbl, cv2.CC_STAT_WIDTH])
         gh = int(stats[lbl, cv2.CC_STAT_HEIGHT])
         area = int(stats[lbl, cv2.CC_STAT_AREA])
-        # Skip tiny fragments or full-screen background frames (unless genuine large banner art)
-        if gw < 28 or gh < 28 or area < 500:
+        # Skip tiny fragments
+        if gw < 24 or gh < 24 or area < 350:
             continue
 
         # Tighten bounding box back to actual non-dilated foreground pixels inside this cluster
         sub_fg = fg_clean[gy : gy + gh, gx : gx + gw]
         ys, xs = np.where(sub_fg > 0)
-        if len(xs) < 120:
+        if len(xs) < 100:
             continue
         pad = 4
         rx0 = max(0, gx + int(xs.min()) - pad)
@@ -263,7 +274,7 @@ def extract_modular_elements(
         ry1 = min(h, gy + int(ys.max()) + pad + 1)
         rw = rx1 - rx0
         rh = ry1 - ry0
-        if rw < 24 or rh < 24:
+        if rw < 22 or rh < 22:
             continue
 
         # Build crisp RGBA cutout: make local background transparent, preserve filled doodle interiors
@@ -272,17 +283,16 @@ def extract_modular_elements(
 
         # Fill closed interiors of doodles (e.g. white eyes / white shirt / white gear centers!)
         # by flood-filling background from the crop's outer border!
-        seed_bg = (crop_dist <= 18.0).astype(np.uint8)
+        seed_bg = (crop_dist <= 20.0).astype(np.uint8)
         padded_bg = cv2.copyMakeBorder(seed_bg, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=1)
         flood_mask = np.zeros((padded_bg.shape[0] + 2, padded_bg.shape[1] + 2), dtype=np.uint8)
         cv2.floodFill(padded_bg, flood_mask, (0, 0), 2)
-        exterior_bg = (padded_bg[1:-1, 1:-1] == 2)
+        exterior_bg = padded_bg[1:-1, 1:-1] == 2
 
         # Soft feathered alpha edge around foreground
         alpha = np.where(exterior_bg, 0, 255).astype(np.uint8)
-        # Smooth only the 1px transition from exterior_bg to foreground
-        soft_edge = exterior_bg & (crop_dist > 10.0)
-        alpha[soft_edge] = np.clip((crop_dist[soft_edge] - 10.0) / 10.0 * 255.0, 0, 255).astype(
+        soft_edge = exterior_bg & (crop_dist > 11.0)
+        alpha[soft_edge] = np.clip((crop_dist[soft_edge] - 11.0) / 11.0 * 255.0, 0, 255).astype(
             np.uint8
         )
 
@@ -290,7 +300,7 @@ def extract_modular_elements(
         alpha[hl_mask[ry0:ry1, rx0:rx1] > 0] = 0
         alpha[wm_mask[ry0:ry1, rx0:rx1] > 0] = 0
 
-        if int((alpha > 128).sum()) < 150:
+        if int((alpha > 128).sum()) < 120:
             continue
 
         rgba = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2BGRA)
